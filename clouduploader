@@ -1,0 +1,104 @@
+#!/bin/bash
+
+echoURL() {
+    local file_name=$1
+    local bucket=$2
+    echo "URL : https://$bucket.s3.amazonaws.com/$file_name"
+    echo
+}
+
+uploadFile() {
+    local local_file_path=$1
+    local bucket=$2
+    local url=$3
+
+    file_size=$(wc -c < "$local_file_path")
+
+    aws s3 cp $local_file_path s3://$bucket
+
+    if [ $? -eq 0 ]; then
+            echo "Upload successful"
+            if [ "$url" == "true" ]; then
+                echoURL $(basename "$local_file_path") $bucket
+            fi
+        else
+            echo "Upload failed"
+        fi
+
+}
+
+getDirectory() {
+    full_path=$1
+
+    file_name=$(basename "$full_path")
+    directory=$(echo "$full_path" | sed s/$file_name//)
+}
+
+copyFileToS3() {
+    local local_file_path=$1
+    local bucket=$2
+    local url=$3
+
+    if [ -e "$local_file_path" ] && [ $? -eq 0 ]; then
+        if [ -f "$local_file_path" ]; then
+            if aws s3api head-object --bucket $bucket  --key $(basename "$local_file_path") &>/dev/null; then
+                read -p "File $local_file_path exists in $bucket. Would you like to skip(s), rename(r), overwrite(o)? " input
+                case "$input" in
+                    o)
+                        echo "$local_file_path will be copied to $bucket"
+                        uploadFile $local_file_path $bucket $url
+                        ;;
+                    s)
+                        echo "Skipping upload $local_file_path"
+                        return
+                        ;;
+                    r)  
+                        while true; do                   
+                            read -p "Enter new name for the $local_file_path : " new_name
+                            cp $local_file_path /tmp/$new_name
+                            if aws s3api head-object --bucket $bucket  --key $new_name &>/dev/null; then
+                                echo "$new_name exists also."
+                            else   
+                                echo "$local_file_path will be uploaded as $new_name"
+                                uploadFile /tmp/$new_name $bucket $url
+                                rm /tmp/$new_name
+                                break
+                            fi
+                        done
+                        ;;
+                    *)
+                        echo "Unknown input $input"
+                        ;;
+                esac
+            else
+                uploadFile $local_file_path $bucket $url
+            fi
+        elif [ -d "$local_file_path" ]; then
+            echo "Unalbe to upload directory"
+            return
+        fi
+    fi
+
+    if [ ! -e "$local_file_path" ]; then
+        echo "$local_file_path does not exist"
+    fi
+}
+
+args=("$@")
+
+
+url=false
+for (( i=0; i<"${#args[@]}"; i++ )); do
+    if [ "${args[i]}" == "--url" ]; then
+        url=true
+        unset 'args[i]'
+    fi
+done
+
+last_index=$(( ${#args[@]} - 1 ))
+bucket="${args[$last_index]}"
+unset 'args[$last_index]'
+
+for local_file_path in "${args[@]}"; do
+    copyFileToS3 $local_file_path $bucket $url
+done
